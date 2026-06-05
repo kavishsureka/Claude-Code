@@ -5,6 +5,7 @@
 
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
+#include "ui.hpp"
 
 using json = nlohmann::json;
 
@@ -82,9 +83,10 @@ cpr::Response call_api(std::vector<json>&messages,std::string base_url,std::stri
 
 void read_tool(json tool,json function_args,std::vector<json>&messages){
     std::string file_path = function_args["file_path"].get<std::string>();
+    ui::print_tool_call("Read", file_path);
     std::ifstream file(file_path);
     if(!file.is_open()){
-        std::cerr << "Could not open the file!" << std::endl;
+        ui::print_error("Could not open the file!");
         return;
     }
     std::string content;
@@ -103,10 +105,11 @@ void read_tool(json tool,json function_args,std::vector<json>&messages){
 void write_tool(json tool,json function_args,std::vector<json>&messages){
     std::string file_path = function_args["file_path"].get<std::string>();
     std::string content = function_args["content"].get<std::string>();
+    ui::print_tool_call("Write", file_path);
     std::ofstream file(file_path,std::ios::out | std::ios::trunc);
 
     if (!file) {
-        std::cout << "Failed to open file\n";
+        ui::print_error("Failed to open file for writing.");
         return ;
     }
     file << content;
@@ -121,11 +124,12 @@ void write_tool(json tool,json function_args,std::vector<json>&messages){
 
 void command_tool(json tool,json function_args,std::vector<json>&messages){
     std::string command = function_args["command"].get<std::string>();
-     command += " 2>&1";  //redirect stderr into stdout. 2 means stderr,> means redirect, &1 means wherever stdout currently points”
+    ui::print_tool_call("Bash", command);
+    command += " 2>&1";  //redirect stderr into stdout. 2 means stderr,> means redirect, &1 means wherever stdout currently points”
 
     FILE *pipe = popen(command.c_str(),"r");
     if(!pipe){
-        std::cerr << "Error opening pipe" << std::endl;
+        ui::print_error("Error opening pipe.");
         return ;
     }
     char buffer[128];
@@ -143,16 +147,9 @@ void command_tool(json tool,json function_args,std::vector<json>&messages){
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 3 || std::string(argv[1]) != "-p") {
-        std::cerr << "Expected first argument to be '-p'" << std::endl;
-        return 1;
-    }
-
-    std::string prompt = argv[2];
-
-    if (prompt.empty()) {
-        std::cerr << "Prompt must not be empty" << std::endl;
-        return 1;
+    std::string initial_prompt = "";
+    if (argc >= 3 && std::string(argv[1]) == "-p") {
+        initial_prompt = argv[2];
     }
 
     const char* api_key_env = std::getenv("OPENROUTER_API_KEY");
@@ -164,61 +161,70 @@ int main(int argc, char* argv[]) {
     std::string model = model_env ? model_env : "meta-llama/llama-3.3-70b-instruct:free";
 
     if (api_key.empty()) {
-        std::cerr << "Error: OPENROUTER_API_KEY environment variable is not set." << std::endl;
+        ui::print_error("OPENROUTER_API_KEY environment variable is not set.");
         std::cerr << "Please set it before running the program:" << std::endl;
         std::cerr << "export OPENROUTER_API_KEY=\"your_key_here\"" << std::endl;
         return 1;
     }
 
-    std::vector<json>messages;   
-   
-    messages.push_back({
-        {"role", "user"}, {"content", prompt}
-    });
+    std::vector<json> messages;   
+    ui::print_welcome_banner();
 
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    std::cerr << "Logs from your program will appear here!" << std::endl;
-
-    while(true){
-        cpr::Response response = call_api(messages,base_url,api_key, model);
-
-        if (response.status_code != 200) {
-            std::cerr << "HTTP error: " << response.status_code << std::endl;
-            return 1;
+    while (true) {
+        std::string prompt;
+        if (!initial_prompt.empty()) {
+            prompt = initial_prompt;
+            initial_prompt = "";
+            std::cout << ui::BOLD << ui::GREEN << "User: " << ui::RESET << prompt << std::endl;
+        } else {
+            std::cout << ui::BOLD << ui::GREEN << "User: " << ui::RESET;
+            if (!std::getline(std::cin, prompt)) break; // EOF (Ctrl+D)
+            if (prompt == "exit" || prompt == "quit") break;
+            if (prompt.empty()) continue;
         }
 
-        json result = json::parse(response.text);
+        messages.push_back({{"role", "user"}, {"content", prompt}});
 
-        if (!result.contains("choices") || result["choices"].empty()) {
-            std::cerr << "No choices in response" << std::endl;
-            return 1;
-        }
+        // Agent loop for handling tools
+        while(true){
+            cpr::Response response = call_api(messages,base_url,api_key, model);
 
-        json message = result["choices"][0]["message"].get<json>();
-        messages.push_back(message);
-    
-        if(!message.contains("tool_calls")||message["tool_calls"].empty()){
-            std::cout << message["content"].get<std::string>();
-            break;
-        }
-
-        for(auto it:message["tool_calls"]){
-
-            json tool = it.get<json>();
-            std::string tool_name = tool["function"]["name"].get<std::string>();
-            json function_args = json::parse(tool["function"]["arguments"].get<std::string>());
-
-            if(tool_name == "Read"){
-                read_tool(tool,function_args,messages);
+            if (response.status_code != 200) {
+                ui::print_error("HTTP error: " + std::to_string(response.status_code));
+                return 1;
             }
-            else if(tool_name == "Write"){
-                write_tool(tool,function_args,messages);
+
+            json result = json::parse(response.text);
+
+            if (!result.contains("choices") || result["choices"].empty()) {
+                ui::print_error("No choices in response");
+                return 1;
             }
-            else if(tool_name == "Bash"){
-                command_tool(tool,function_args,messages);
+
+            json message = result["choices"][0]["message"].get<json>();
+            messages.push_back(message);
+        
+            if(!message.contains("tool_calls")||message["tool_calls"].empty()){
+                ui::print_assistant_message(message["content"].get<std::string>());
+                break; // Break agent loop to ask user again
+            }
+
+            for(auto it:message["tool_calls"]){
+                json tool = it.get<json>();
+                std::string tool_name = tool["function"]["name"].get<std::string>();
+                json function_args = json::parse(tool["function"]["arguments"].get<std::string>());
+
+                if(tool_name == "Read"){
+                    read_tool(tool,function_args,messages);
+                }
+                else if(tool_name == "Write"){
+                    write_tool(tool,function_args,messages);
+                }
+                else if(tool_name == "Bash"){
+                    command_tool(tool,function_args,messages);
+                }
             }
         }
-
     }
     return 0;
 }

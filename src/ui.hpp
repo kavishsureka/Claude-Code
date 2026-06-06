@@ -25,6 +25,11 @@ namespace ui {
     // Helpers for chat loop
     void print_assistant_message(const std::string& message);
     void print_tool_call(const std::string& tool_name, const std::string& arguments);
+    void print_reasoning(const std::string& reasoning);
+
+    // Loading Spinner
+    void start_spinner(const std::string& text = "Thinking");
+    void stop_spinner();
 
 }
 

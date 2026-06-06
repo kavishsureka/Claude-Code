@@ -14,6 +14,7 @@ cpr::Response call_api(std::vector<json>&messages,std::string base_url,std::stri
     json request_body = {
         {"model", model},
         {"messages", messages},
+        {"include_reasoning", true},
         {"tools", json::array({
             {
                 {"type", "function"},
@@ -70,6 +71,7 @@ cpr::Response call_api(std::vector<json>&messages,std::string base_url,std::stri
             }
         })}
     };
+    ui::start_spinner();
     cpr::Response response = cpr::Post(
         cpr::Url{base_url + "/chat/completions"},
         cpr::Header{
@@ -78,6 +80,7 @@ cpr::Response call_api(std::vector<json>&messages,std::string base_url,std::stri
         },
         cpr::Body{request_body.dump()}
     );
+    ui::stop_spinner();
     return response;
 }
 
@@ -202,6 +205,12 @@ int main(int argc, char* argv[]) {
             }
 
             json message = result["choices"][0]["message"].get<json>();
+            if (message.contains("reasoning") && !message["reasoning"].is_null()) {
+                std::string reasoning = message["reasoning"].get<std::string>();
+                if (!reasoning.empty()) {
+                    ui::print_reasoning(reasoning);
+                }
+            }
             messages.push_back(message);
         
             if(!message.contains("tool_calls")||message["tool_calls"].empty()){

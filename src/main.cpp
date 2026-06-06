@@ -2,6 +2,7 @@
 #include <iostream>
 #include <string>
 #include <fstream>
+#include <dirent.h>
 
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
@@ -68,6 +69,17 @@ cpr::Response call_api(std::vector<json>&messages,std::string base_url,std::stri
                         }}
                     }}
                 }}
+            },{
+                {"type", "function"},
+                {"function", {
+                    {"name", "List_Skills"},
+                    {"description", "List all custom skills/workflows available in the skills/ directory. Call this to see if a predefined skill exists for the user's task. If you find a relevant skill, use the Read tool to read its contents."},
+                    {"parameters", {
+                        {"type", "object"},
+                        {"properties", json::object()},
+                        {"required", json::array()}
+                    }}
+                }}
             }
         })}
     };
@@ -90,6 +102,11 @@ void read_tool(json tool,json function_args,std::vector<json>&messages){
     std::ifstream file(file_path);
     if(!file.is_open()){
         ui::print_error("Could not open the file!");
+        messages.push_back({
+            {"role", "tool"},
+            {"tool_call_id", tool["id"].get<std::string>()},
+            {"content", "Error: Could not open the file!"}
+        });
         return;
     }
     std::string content;
@@ -113,7 +130,12 @@ void write_tool(json tool,json function_args,std::vector<json>&messages){
 
     if (!file) {
         ui::print_error("Failed to open file for writing.");
-        return ;
+        messages.push_back({
+            {"role", "tool"},
+            {"tool_call_id", tool["id"].get<std::string>()},
+            {"content", "Error: Failed to open file for writing."}
+        });
+        return;
     }
     file << content;
     file.close();
@@ -133,7 +155,12 @@ void command_tool(json tool,json function_args,std::vector<json>&messages){
     FILE *pipe = popen(command.c_str(),"r");
     if(!pipe){
         ui::print_error("Error opening pipe.");
-        return ;
+        messages.push_back({
+            {"role", "tool"},
+            {"tool_call_id", tool["id"].get<std::string>()},
+            {"content", "Error: Could not open pipe to execute command."}
+        });
+        return;
     }
     char buffer[128];
     std::string result;
@@ -146,6 +173,30 @@ void command_tool(json tool,json function_args,std::vector<json>&messages){
         {"role","tool"},
         {"tool_call_id",tool["id"].get<std::string>()},
         {"content",result}
+    });
+}
+
+void list_skills_tool(json tool, json function_args, std::vector<json>&messages) {
+    ui::print_tool_call("List_Skills", "");
+    std::string result = "Available skills in skills/ directory:\n";
+    DIR *dir;
+    struct dirent *ent;
+    if ((dir = opendir("skills")) != nullptr) {
+        while ((ent = readdir(dir)) != nullptr) {
+            std::string filename = ent->d_name;
+            if (filename != "." && filename != "..") {
+                result += "- " + filename + "\n";
+            }
+        }
+        closedir(dir);
+    } else {
+        result = "No skills directory found or it is empty.";
+    }
+    
+    messages.push_back({
+        {"role", "tool"},
+        {"tool_call_id", tool["id"].get<std::string>()},
+        {"content", result}
     });
 }
 
@@ -194,6 +245,11 @@ int main(int argc, char* argv[]) {
 
             if (response.status_code != 200) {
                 ui::print_error("HTTP error: " + std::to_string(response.status_code));
+                if (response.status_code == 0) {
+                    ui::print_error("CURL Error: " + response.error.message);
+                } else if (!response.text.empty()) {
+                    ui::print_error("Response body: " + response.text);
+                }
                 return 1;
             }
 
@@ -231,6 +287,9 @@ int main(int argc, char* argv[]) {
                 }
                 else if(tool_name == "Bash"){
                     command_tool(tool,function_args,messages);
+                }
+                else if(tool_name == "List_Skills"){
+                    list_skills_tool(tool,function_args,messages);
                 }
             }
         }

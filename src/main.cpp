@@ -7,6 +7,7 @@
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
 #include "ui.hpp"
+#include "config.hpp"
 
 using json = nlohmann::json;
 
@@ -202,8 +203,15 @@ void list_skills_tool(json tool, json function_args, std::vector<json>&messages)
 
 int main(int argc, char* argv[]) {
     std::string initial_prompt = "";
-    if (argc >= 3 && std::string(argv[1]) == "-p") {
-        initial_prompt = argv[2];
+    std::string cli_model = "";
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-p" || arg == "--prompt") {
+            if (i + 1 < argc) initial_prompt = argv[++i];
+        } else if (arg == "-m" || arg == "--model") {
+            if (i + 1 < argc) cli_model = argv[++i];
+        }
     }
 
     const char* api_key_env = std::getenv("OPENROUTER_API_KEY");
@@ -212,7 +220,6 @@ int main(int argc, char* argv[]) {
 
     std::string api_key = api_key_env ? api_key_env : "";
     std::string base_url = base_url_env ? base_url_env : "https://openrouter.ai/api/v1";
-    std::string model = model_env ? model_env : "meta-llama/llama-3.3-70b-instruct:free";
 
     if (api_key.empty()) {
         ui::print_error("OPENROUTER_API_KEY environment variable is not set.");
@@ -220,6 +227,29 @@ int main(int argc, char* argv[]) {
         std::cerr << "export OPENROUTER_API_KEY=\"your_key_here\"" << std::endl;
         return 1;
     }
+
+    std::string final_model_raw = "";
+    if (!cli_model.empty()) {
+        final_model_raw = cli_model;
+    } else if (model_env && std::string(model_env) != "") {
+        final_model_raw = model_env;
+    } else {
+        std::string config_model = config::get_model_from_config("config.json");
+        if (!config_model.empty()) {
+            final_model_raw = config_model;
+        } else {
+            final_model_raw = "llama"; // Default fallback
+        }
+    }
+
+    std::string resolved_model = config::resolve_alias(final_model_raw);
+
+    if (!config::validate_model(resolved_model, api_key, base_url)) {
+        ui::print_error("Model '" + resolved_model + "' is not available on OpenRouter.");
+        return 1;
+    }
+    
+    ui::print_system("Using model: " + resolved_model);
 
     std::vector<json> messages;   
     ui::print_welcome_banner();
@@ -241,7 +271,7 @@ int main(int argc, char* argv[]) {
 
         // Agent loop for handling tools
         while(true){
-            cpr::Response response = call_api(messages,base_url,api_key, model);
+            cpr::Response response = call_api(messages,base_url,api_key, resolved_model);
 
             if (response.status_code != 200) {
                 ui::print_error("HTTP error: " + std::to_string(response.status_code));

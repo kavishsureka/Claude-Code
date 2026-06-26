@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include "ui.hpp"
 #include "config.hpp"
+#include "web_search.hpp"
 
 using json = nlohmann::json;
 
@@ -66,6 +67,22 @@ cpr::Response call_api(std::vector<json>&messages,std::string base_url,std::stri
                             {"command", {
                                 {"type", "string"},
                                 {"description", "The command to execute"}
+                            }}
+                        }}
+                    }}
+                }}
+            },{
+                {"type", "function"},
+                {"function", {
+                    {"name", "Web_Search"},
+                    {"description", "Perform a web search to find real-time information. Use this when the user asks about current events or needs factual information from the internet."},
+                    {"parameters", {
+                        {"type", "object"},
+                        {"required", json::array({"query"})},
+                        {"properties", {
+                            {"query", {
+                                {"type", "string"},
+                                {"description", "The search query to look up on the web"}
                             }}
                         }}
                     }}
@@ -201,6 +218,22 @@ void list_skills_tool(json tool, json function_args, std::vector<json>&messages)
     });
 }
 
+void web_search_tool(json tool, json function_args, std::vector<json>& messages) {
+    std::string query = function_args["query"].get<std::string>();
+    ui::print_tool_call("Web_Search", query);
+    
+    const char* env_key = std::getenv("TAVILY_API_KEY");
+    std::string brave_key = env_key ? env_key : "";
+    
+    std::string result = web::perform_web_search(query, brave_key);
+    
+    messages.push_back({
+        {"role", "tool"},
+        {"tool_call_id", tool["id"].get<std::string>()},
+        {"content", result}
+    });
+}
+
 int main(int argc, char* argv[]) {
     std::string initial_prompt = "";
     std::string cli_model = "";
@@ -320,6 +353,9 @@ int main(int argc, char* argv[]) {
                 }
                 else if(tool_name == "List_Skills"){
                     list_skills_tool(tool,function_args,messages);
+                }
+                else if(tool_name == "Web_Search"){
+                    web_search_tool(tool,function_args,messages);
                 }
             }
         }

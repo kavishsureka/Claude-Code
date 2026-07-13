@@ -4,10 +4,13 @@ This is an AI coding assistant built in C++ that uses Large Language Models (LLM
 
 The assistant is capable of:
 - Understanding and engaging in natural language conversations about your codebase.
+- Using an extensible Skills framework to dynamically read custom Markdown guidelines and adapt to your personal workflow.
+- Seamlessly switching between different LLMs via CLI flags, environment variables, or a local `config.json` file.
 - Using tools to interact with your system:
   - Reading files
   - Writing files
   - Executing bash commands
+  - Performing real-time Web Searches (via Tavily API) for factual information.
 
 ## Prerequisites
 
@@ -23,12 +26,13 @@ The assistant is capable of:
 
 This project uses the OpenAI-compatible OpenRouter API for LLM interactions.
 
-1. **Get an OpenRouter API Key**: Sign up at [OpenRouter.ai](https://openrouter.ai/) and generate an API key.
-2. **Set Environment Variables**: In your terminal, set your API key and optionally the model you wish to use (defaults to Nemotron 3 Super 120B for fast, free tool-calling).
+2. **Get a Tavily API Key**: Sign up at [Tavily](https://tavily.com/) for a free tier API key to enable Web Search capabilities.
+3. **Set Environment Variables**: In your terminal, set your API keys and optionally the model you wish to use (defaults to Llama 3 if left empty). You can also use model aliases like `sonnet`, `haiku`, `gpt4o`, etc.
 
 ```bash
-export OPENROUTER_API_KEY="your-api-key-here"
-export OPENROUTER_MODEL="nvidia/nemotron-3-super-120b-a12b:free"
+export OPENROUTER_API_KEY="your-openrouter-key-here"
+export TAVILY_API_KEY="tvly-your-tavily-key-here"
+export OPENROUTER_MODEL="sonnet"
 ```
 
 ## Build and Run

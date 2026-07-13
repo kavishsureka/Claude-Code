@@ -1047,4 +1047,5 @@ dkms.conf
 vcpkg_installed
 # Local environment variables
 .env
-
+prep.md
+Claude_Code_Clone_Prep.md

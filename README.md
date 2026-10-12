@@ -53,3 +53,33 @@ cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vc
 cmake --build ./build
 ./build/claude-code -p "Your prompt here"
 ```
+
+## MCP foundations
+
+The tool registry, server configuration, and local stdio transport are implemented.
+MCP initialization, tool discovery, and calling external tools from chat are not yet
+connected. Configured servers are currently parsed and validated but not launched
+by the assistant.
+
+`config.json` accepts `model` and an optional `mcpServers` object. Each named server
+has a required `command` and optional `args` (string array), `cwd`, `env` (string
+overrides), and `timeoutMs` (1–300000, default 10000). Bare commands use PATH;
+relative executable paths and `cwd` resolve against the configuration directory.
+Arguments are passed literally, and relative argument paths are interpreted by
+the server from its working directory. Only trusted local executables should be
+configured. The transport currently supports macOS and Linux.
+
+Select another configuration file with:
+
+```sh
+./build/claude-code --config /path/to/config.json
+```
+
+Run the local registry, configuration, and subprocess transport tests (no API key
+or external MCP server required):
+
+```sh
+cmake -S . -B build -DBUILD_TESTING=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+```

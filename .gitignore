@@ -1049,3 +1049,6 @@ vcpkg_installed
 .env
 prep.md
 Claude_Code_Clone_Prep.md
+
+# Local implementation walkthrough
+/MCP_IMPLEMENTATION_NOTES.md

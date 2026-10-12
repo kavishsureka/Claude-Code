@@ -62,19 +62,4 @@ namespace config {
         return false;
     }
 
-    std::string get_model_from_config(const std::string& config_path) {
-        std::ifstream file(config_path);
-        if (file.is_open()) {
-            try {
-                json j;
-                file >> j;
-                if (j.contains("model") && j["model"].is_string()) {
-                    return j["model"].get<std::string>();
-                }
-            } catch (...) {
-                // Return silently, default to next precedence
-            }
-        }
-        return "";
-    }
 }

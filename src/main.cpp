@@ -8,6 +8,7 @@
 #include "ui.hpp"
 #include "config.hpp"
 #include "builtin_tools.hpp"
+#include "mcp/manager.hpp"
 
 using json = nlohmann::json;
 
@@ -36,6 +37,7 @@ int main(int argc, char* argv[]) {
     std::string initial_prompt = "";
     std::string cli_model = "";
     std::string config_path = "config.json";
+    bool check_mcp = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -43,6 +45,8 @@ int main(int argc, char* argv[]) {
             if (i + 1 < argc) initial_prompt = argv[++i];
         } else if (arg == "-m" || arg == "--model") {
             if (i + 1 < argc) cli_model = argv[++i];
+        } else if (arg == "--mcp-check") {
+            check_mcp = true;
         } else if (arg == "--config") {
             if (i + 1 >= argc) {
                 ui::print_error("--config requires a file path");
@@ -59,10 +63,13 @@ int main(int argc, char* argv[]) {
         ui::print_error(error.what());
         return 1;
     }
-    if (!app_config.mcp_servers.empty()) {
-        ui::print_system("MCP configuration loaded; server connections require the upcoming MCP client lifecycle.");
-    }
     ToolRegistry registry = make_builtin_registry();
+    // Diagnostic mode uses exactly the same startup/discovery path without an LLM.
+    if (check_mcp) {
+        mcp::Manager manager(registry, app_config.mcp_servers);
+        std::cout << manager.status() << std::endl;
+        return manager.all_available() ? 0 : 1;
+    }
 
     const char* api_key_env = std::getenv("OPENROUTER_API_KEY");
     const char* base_url_env = std::getenv("OPENROUTER_BASE_URL");
@@ -101,6 +108,10 @@ int main(int argc, char* argv[]) {
     
     ui::print_system("Using model: " + resolved_model);
 
+    mcp::Manager mcp_manager(registry, app_config.mcp_servers,
+        [](const std::string& name, const std::string& args) { ui::print_tool_call(name, args); });
+    if (!app_config.mcp_servers.empty()) ui::print_system(mcp_manager.status());
+
     std::vector<json> messages;   
     ui::print_welcome_banner();
 
@@ -117,6 +128,17 @@ int main(int argc, char* argv[]) {
             if (prompt.empty()) continue;
         }
 
+        if (prompt == "/mcp") {
+            ui::print_system(mcp_manager.status());
+            continue;
+        }
+        if (prompt == "/tools") {
+            for (const auto& tool : registry.definitions()) {
+                ui::print_system(tool.at("function").at("name").get<std::string>() + ": " +
+                                 tool.at("function").at("description").get<std::string>());
+            }
+            continue;
+        }
         messages.push_back({{"role", "user"}, {"content", prompt}});
 
         // Agent loop for handling tools

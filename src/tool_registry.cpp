@@ -1,19 +1,21 @@
 #include "tool_registry.hpp"
 #include <stdexcept>
 
-void ToolRegistry::add(Json definition, Handler handler) {
+void ToolRegistry::add(Json definition, Handler handler, std::function<bool()> available) {
     const auto name = definition.at("function").at("name").get<std::string>();
     if (name.empty() || definition.at("type") != "function" || !handler) {
         throw std::invalid_argument("Invalid tool registration");
     }
-    if (!entries_.emplace(name, Entry{std::move(definition), std::move(handler)}).second) {
+    if (!entries_.emplace(name, Entry{std::move(definition), std::move(handler), std::move(available)}).second) {
         throw std::invalid_argument("Duplicate tool: " + name);
     }
 }
 
 ToolRegistry::Json ToolRegistry::definitions() const {
     Json result = Json::array();
-    for (const auto& [name, entry] : entries_) result.push_back(entry.definition);
+    for (const auto& [name, entry] : entries_) {
+        if (!entry.available || entry.available()) result.push_back(entry.definition);
+    }
     return result;
 }
 
@@ -26,6 +28,7 @@ ToolRegistry::Json ToolRegistry::dispatch(const Json& tool_call) const {
         const auto name = function.at("name").get<std::string>();
         const auto entry = entries_.find(name);
         if (entry == entries_.end()) throw std::invalid_argument("Unknown tool: " + name);
+        if (entry->second.available && !entry->second.available()) throw std::runtime_error("Tool unavailable: " + name);
         const auto args = Json::parse(function.at("arguments").get<std::string>());
         if (!args.is_object()) throw std::invalid_argument("Tool arguments must be an object");
 
@@ -38,7 +41,7 @@ ToolRegistry::Json ToolRegistry::dispatch(const Json& tool_call) const {
         }
         const auto properties = schema.value("properties", Json::object());
         for (const auto& [key, property] : properties.items()) {
-            if (args.contains(key) && property.value("type", "") == "string" && !args.at(key).is_string()) {
+            if (args.contains(key) && property.is_object() && property.contains("type") && property.at("type") == "string" && !args.at(key).is_string()) {
                 throw std::invalid_argument("Argument must be a string: " + key);
             }
         }

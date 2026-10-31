@@ -8,7 +8,10 @@
 
 namespace mcp {
 
-// Owns one server process and its pipes. Sequential use only; no protocol handshake.
+// OS boundary: owns one server process and its pipes. Sequential use only.
+// To understand MCP first, read client.cpp and treat this class as:
+//   send(JSON, deadline), receive(deadline), close().
+// Its implementation handles byte buffering and process lifetime, not MCP rules.
 class StdioTransport {
 public:
     using Clock = std::chrono::steady_clock;
@@ -22,7 +25,7 @@ public:
     StdioTransport(StdioTransport&&) = delete;
     StdioTransport& operator=(StdioTransport&&) = delete;
 
-    // Pass the same deadline to send/read to bound an entire future RPC request.
+    // Pass the same deadline to send/read to bound an entire RPC request.
     Deadline deadline() const;
     void send(const nlohmann::json& message, Deadline until);
     nlohmann::json receive(Deadline until);

@@ -1,0 +1,10 @@
+{
+  "model": "opus",
+  "mcpServers": {
+    "project": {
+      "command": "../build/mcp-sdk-venv/bin/python",
+      "args": ["demo_server.py"],
+      "timeoutMs": 10000
+    }
+  }
+}

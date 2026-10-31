@@ -95,6 +95,49 @@ ssize_t write_without_sigpipe(int fd, const void* data, std::size_t size) {
     return written;
 }
 
+// Prepare executable arguments before fork. These vectors own the strings
+// referenced by argv/envp, so they must stay alive until the child has executed.
+struct PreparedCommand {
+    std::vector<std::string> env_strings;
+    std::vector<std::string> arguments;
+    std::vector<std::string> candidates;
+    std::vector<char*> envp;
+    std::vector<char*> argv;
+    std::vector<const char*> executables;
+    std::string cwd;
+
+    explicit PreparedCommand(const config::McpServerConfig& config) {
+        std::map<std::string, std::string> environment;
+        for (char** current = environ; *current; ++current) {
+            const std::string item(*current);
+            const auto equal = item.find('=');
+            if (equal != std::string::npos) environment[item.substr(0, equal)] = item.substr(equal + 1);
+        }
+        for (const auto& [key, value] : config.env) environment[key] = value;
+        for (const auto& [key, value] : environment) env_strings.push_back(key + "=" + value);
+        for (auto& item : env_strings) envp.push_back(item.data());
+        envp.push_back(nullptr);
+        arguments.push_back(config.command);
+        arguments.insert(arguments.end(), config.args.begin(), config.args.end());
+        for (auto& arg : arguments) argv.push_back(arg.data());
+        argv.push_back(nullptr);
+        cwd = config.cwd.string();
+        if (config.command.find('/') != std::string::npos) candidates.push_back(config.command);
+        else {
+            const std::string path = environment.contains("PATH") ? environment.at("PATH") : "/usr/bin:/bin";
+            std::size_t start = 0;
+            do {
+                const auto end = path.find(':', start);
+                const auto dir = path.substr(start, end - start);
+                candidates.push_back((dir.empty() ? "." : dir) + "/" + config.command);
+                if (end == std::string::npos) break;
+                start = end + 1;
+            } while (true);
+        }
+        for (const auto& candidate : candidates) executables.push_back(candidate.c_str());
+    }
+};
+
 bool wait_for_exit(pid_t pid, std::chrono::milliseconds duration) noexcept {
     const auto until = StdioTransport::Clock::now() + duration;
     do {
@@ -108,52 +151,21 @@ bool wait_for_exit(pid_t pid, std::chrono::milliseconds duration) noexcept {
 
 StdioTransport::StdioTransport(const config::McpServerConfig& config) : timeout_ms_(config.timeout_ms) {
     if (config.command.empty() || timeout_ms_ <= 0) throw std::invalid_argument("Invalid MCP transport configuration");
-    // Prepare all strings before fork; the child only uses async-signal-safe calls.
-    std::map<std::string, std::string> environment;
-    for (char** current = environ; *current; ++current) {
-        const std::string item(*current);
-        const auto equal = item.find('=');
-        if (equal != std::string::npos) environment[item.substr(0, equal)] = item.substr(equal + 1);
-    }
-    for (const auto& [key, value] : config.env) environment[key] = value;
-    std::vector<std::string> env_strings;
-    for (const auto& [key, value] : environment) env_strings.push_back(key + "=" + value);
-    std::vector<char*> envp;
-    for (auto& item : env_strings) envp.push_back(item.data());
-    envp.push_back(nullptr);
-    std::vector<std::string> arguments{config.command};
-    arguments.insert(arguments.end(), config.args.begin(), config.args.end());
-    std::vector<char*> argv;
-    for (auto& arg : arguments) argv.push_back(arg.data());
-    argv.push_back(nullptr);
-    const std::string cwd = config.cwd.string();
-    std::vector<std::string> candidates;
-    if (config.command.find('/') != std::string::npos) candidates.push_back(config.command);
-    else {
-        const std::string path = environment.contains("PATH") ? environment.at("PATH") : "/usr/bin:/bin";
-        std::size_t start = 0;
-        do {
-            const auto end = path.find(':', start);
-            const auto dir = path.substr(start, end - start);
-            candidates.push_back((dir.empty() ? "." : dir) + "/" + config.command);
-            if (end == std::string::npos) break;
-            start = end + 1;
-        } while (true);
-    }
-    std::vector<const char*> executables;
-    for (const auto& candidate : candidates) executables.push_back(candidate.c_str());
-    const auto candidate_count = executables.size();
-    const auto candidate_data = executables.data();
-    const auto argument_data = argv.data();
-    const auto environment_data = envp.data();
-    const auto working_directory = cwd.c_str();
-    const bool change_directory = !cwd.empty();
+    PreparedCommand command(config);
+    const auto candidate_count = command.executables.size();
+    const auto candidate_data = command.executables.data();
+    const auto argument_data = command.argv.data();
+    const auto environment_data = command.envp.data();
+    const auto working_directory = command.cwd.c_str();
+    const bool change_directory = !command.cwd.empty();
 
+    // 1. Create the two message channels and a separate startup-error channel.
     Pipe to_child, from_child, launch_error;
     const auto until = deadline();
     pid_ = fork();
     if (pid_ < 0) system_error("fork MCP server");
     if (pid_ == 0) {
+        // 2. Child: connect stdin/stdout, then replace this process with the server.
         // Errors cross a CLOEXEC pipe; successful exec closes it automatically.
         int error = 0;
         if (setpgid(0, 0) < 0 ||
@@ -182,13 +194,18 @@ StdioTransport::StdioTransport(const config::McpServerConfig& config) : timeout_
         }
         _exit(127);
     }
+    // 3. Parent: retain our pipe ends and confirm executable startup.
     // Parent and child both establish the group to avoid a startup cleanup race.
     setpgid(pid_, pid_);
     close_fd(to_child.read); close_fd(from_child.write); close_fd(launch_error.write);
-    input_ = to_child.write; to_child.write = -1;
-    output_ = from_child.read; from_child.read = -1;
+    input_ = to_child.write;
+    to_child.write = -1;
+    output_ = from_child.read;
+    from_child.read = -1;
     try {
-        nonblocking(input_); nonblocking(output_); nonblocking(launch_error.read);
+        nonblocking(input_);
+        nonblocking(output_);
+        nonblocking(launch_error.read);
         int error = 0;
         std::size_t received = 0;
         while (received < sizeof(error)) {
@@ -203,7 +220,10 @@ StdioTransport::StdioTransport(const config::McpServerConfig& config) : timeout_
             received += static_cast<std::size_t>(count);
         }
         if (received) throw std::system_error(error, std::generic_category(), "launch MCP server " + config.name);
-    } catch (...) { close(); throw; }
+    } catch (...) {
+        close();
+        throw;
+    }
 }
 
 StdioTransport::~StdioTransport() { close(); }
@@ -212,6 +232,7 @@ StdioTransport::Deadline StdioTransport::deadline() const {
     return Clock::now() + std::chrono::milliseconds(timeout_ms_);
 }
 
+// Send one complete JSON line, even if the OS accepts only part at a time.
 void StdioTransport::send(const nlohmann::json& message, Deadline until) {
     if (!is_open()) throw std::runtime_error("MCP transport is closed");
     if (!message.is_object()) throw std::invalid_argument("MCP message must be a JSON object");
@@ -228,9 +249,13 @@ void StdioTransport::send(const nlohmann::json& message, Deadline until) {
             if (count == 0) throw std::runtime_error("MCP write made no progress");
             sent += static_cast<std::size_t>(count);
         }
-    } catch (...) { close(); throw; }
+    } catch (...) {
+        close();
+        throw;
+    }
 }
 
+// Read until one full line exists; keep extra bytes for the next receive.
 nlohmann::json StdioTransport::receive(Deadline until) {
     if (!is_open()) throw std::runtime_error("MCP transport is closed");
     try {
@@ -252,7 +277,10 @@ nlohmann::json StdioTransport::receive(Deadline until) {
             if (count == 0) throw std::runtime_error(pending_.empty() ? "MCP server closed stdout" : "MCP server closed stdout mid-message");
             pending_.append(buffer, static_cast<std::size_t>(count));
         }
-    } catch (...) { close(); throw; }
+    } catch (...) {
+        close();
+        throw;
+    }
 }
 
 void StdioTransport::close() noexcept {
